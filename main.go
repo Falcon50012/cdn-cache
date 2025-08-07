@@ -3,36 +3,34 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 var cacheDir = "tmp/cdn_cache/"
 
 type content struct {
 	target   string
+	fileName string
 	maxSize  int
-	isCached bool
-	cacheMap map[string]*cache
-	mu       sync.Mutex // * || !* ?
+	// cacheMap map[string]*cache
+	// mu       sync.Mutex
 }
 
-type cache struct {
-	filePath   string
-	lastUpdate time.Time
-}
+// type cache struct {
+// 	isCached   bool
+// 	lastUpdate time.Time
+// }
 
 func newContent() *content {
 	return &content{
-		maxSize:  10 * 1024 * 1024,
-		cacheMap: map[string]*cache{},
+		maxSize: 10 * 1024 * 1024,
+		// cacheMap: map[string]*cache{},
 	}
 }
 
@@ -57,11 +55,22 @@ func fetchHandler(c *content) http.Handler {
 			http.Error(w, "Missing query parameter", http.StatusBadRequest)
 			return
 		}
-		_, err := downloadContent(c)
-		if err != nil {
-			http.Error(w, "Failed to download file", http.StatusInternalServerError)
+
+		c.fileName = hashFileName(c)
+		_, err := os.Stat(cacheDir + c.fileName)
+		if err != nil && errors.Unwrap(err).Error() != "The system cannot find the file specified." {
+			fmt.Println(err)
 			return
 		}
+		if err != nil && errors.Unwrap(err).Error() == "The system cannot find the file specified." {
+			_, err := downloadContent(c)
+			if err != nil {
+				http.Error(w, "Failed to download file", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		http.ServeFile(w, r, cacheDir+c.fileName)
 	})
 }
 
@@ -75,21 +84,12 @@ func hashFileName(c *content) string {
 }
 
 func downloadContent(c *content) (*os.File, error) {
-	// var outFile *os.File
-
 	response, err := http.Get(c.target)
 	if err != nil {
 		log.Println("GET request error:", err)
 		return nil, err
 	}
 	defer response.Body.Close()
-
-	fileName := hashFileName(c)
-
-	// if c.isCached {
-	// 	log.Println("File is already in cache")
-	// 	return outFile, nil
-	// }
 
 	contentLength := response.Header.Get("Content-Length")
 	if contentLength == "" {
@@ -104,17 +104,7 @@ func downloadContent(c *content) (*os.File, error) {
 		return nil, err
 	}
 
-	contentType := response.Header.Get("Content-Type")
-	// fmt.Println("Content-Type:", contentType)
-
-	fileType := strings.SplitAfter(contentType, "/")
-	extension := "." + fileType[1]
-	// fmt.Println("Extension:", extension)
-
-	// fileName := time.Now().Format("2006-01-02-15-04-05")
-	// fmt.Println(fileName)
-
-	outFile, err := os.Create(cacheDir + fileName + extension)
+	outFile, err := os.Create(cacheDir + c.fileName)
 	if err != nil {
 		log.Println("Blank file creation error", err)
 		return nil, err
@@ -127,19 +117,11 @@ func downloadContent(c *content) (*os.File, error) {
 		return nil, err
 	}
 
-	// fmt.Println("outFile.Name()", outFile.Name())
 	fileStat, _ := outFile.Stat()
 	fmt.Printf("FileName: %v\nSize: %v bytes\nMode: %v\nModTime: %v\nIsDir: %v\nSys: %v\n",
 		fileStat.Name(), fileStat.Size(), fileStat.Mode(), fileStat.ModTime(), fileStat.IsDir(), fileStat.Sys())
 
 	println("Download successful")
 
-	// c.isCached = true
-	// log.Printf("File %s is cached\n", fileStat.Name())
-
 	return outFile, nil
-}
-
-func storeInMap(c *content) {
-
 }
